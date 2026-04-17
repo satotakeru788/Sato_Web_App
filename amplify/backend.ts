@@ -1,8 +1,6 @@
 import "./load-env";
 import { defineBackend } from "@aws-amplify/backend";
-import { Stack } from "aws-cdk-lib";
 import type { ITable } from "aws-cdk-lib/aws-dynamodb";
-import { Table } from "aws-cdk-lib/aws-dynamodb";
 import { Function as LambdaFunction } from "aws-cdk-lib/aws-lambda";
 import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
 import { auth } from "./auth/resource";
@@ -39,17 +37,23 @@ if (!studyLogTableRef) {
   throw new Error("backend.data.resources.tables.StudyLog is undefined; cannot grant study-rag DynamoDB access.");
 }
 const studyRagLambda = backend.studyRag.resources.lambda as LambdaFunction;
-const studyLogForGrants = Table.fromTableAttributes(
-  Stack.of(studyRagLambda),
-  "StudyLogStudyRagDdbGrants",
-  {
-    tableArn: studyLogTableRef.tableArn,
-    globalIndexes: ["studyLogsByOwnerGoalKeyAndLogDate"],
-  },
+
+/** 月次分析の Query 用 GSI。fromTableAttributes + grantReadData では GSI ARN が IAM に乗らない環境があるため明示する */
+const STUDY_LOG_GSI = "studyLogsByOwnerGoalKeyAndLogDate";
+const studyLogTableArn = studyLogTableRef.tableArn;
+const studyLogGsiArn = `${studyLogTableArn}/index/${STUDY_LOG_GSI}`;
+
+studyRagLambda.addToRolePolicy(
+  new PolicyStatement({
+    effect: Effect.ALLOW,
+    actions: [
+      "dynamodb:Query",
+      "dynamodb:GetItem",
+      "dynamodb:BatchGetItem",
+      "dynamodb:ConditionCheckItem",
+    ],
+    resources: [studyLogTableArn, studyLogGsiArn],
+  }),
 );
-studyLogForGrants.grantReadData(studyRagLambda);
 studyRagLambda.addEnvironment("STUDY_LOG_TABLE_NAME", studyLogTableRef.tableName);
-studyRagLambda.addEnvironment(
-  "STUDY_LOG_GSI_NAME",
-  "studyLogsByOwnerGoalKeyAndLogDate",
-);
+studyRagLambda.addEnvironment("STUDY_LOG_GSI_NAME", STUDY_LOG_GSI);

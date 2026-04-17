@@ -23,6 +23,10 @@ dist-ssr
 *.sln
 *.sw?
 
+# env（秘密値は .env / .env.local のみ。テンプレートは .env.example）
+.env
+.env.local
+
 # amplify
 .amplify
 amplify_outputs*

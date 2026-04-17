@@ -1,8 +1,55 @@
-import { defineBackend } from '@aws-amplify/backend';
-import { auth } from './auth/resource';
-import { data } from './data/resource';
+import "./load-env";
+import { defineBackend } from "@aws-amplify/backend";
+import { Stack } from "aws-cdk-lib";
+import type { ITable } from "aws-cdk-lib/aws-dynamodb";
+import { Table } from "aws-cdk-lib/aws-dynamodb";
+import { Function as LambdaFunction } from "aws-cdk-lib/aws-lambda";
+import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
+import { auth } from "./auth/resource";
+import { data } from "./data/resource";
+import { studyRag } from "./functions/study-rag/resource";
 
-defineBackend({
+const backend = defineBackend({
   auth,
   data,
+  studyRag,
 });
+
+// Bedrock: 埋め込み（InvokeModel）と会話生成（Converse も InvokeModel 権限で許可）
+backend.studyRag.resources.lambda.addToRolePolicy(
+  new PolicyStatement({
+    effect: Effect.ALLOW,
+    actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+    resources: ["*"],
+  }),
+);
+
+// S3 Vectors: 書き込み + 月次分析での GetVectors
+backend.studyRag.resources.lambda.addToRolePolicy(
+  new PolicyStatement({
+    effect: Effect.ALLOW,
+    actions: ["s3vectors:PutVectors", "s3vectors:GetVectors"],
+    resources: ["*"],
+  }),
+);
+
+const studyLogTableRef = (backend.data.resources as { tables?: Record<string, ITable> })
+  .tables?.["StudyLog"];
+if (!studyLogTableRef) {
+  throw new Error("backend.data.resources.tables.StudyLog is undefined; cannot grant study-rag DynamoDB access.");
+}
+const studyRagLambda = backend.studyRag.resources.lambda as LambdaFunction;
+const studyLogForGrants = Table.fromTableAttributes(
+  Stack.of(studyRagLambda),
+  "StudyLogStudyRagDdbGrants",
+  {
+    tableArn: studyLogTableRef.tableArn,
+    globalIndexes: ["studyLogsByOwnerGoalKeyAndLogDate"],
+  },
+);
+studyLogForGrants.grantReadData(studyRagLambda);
+studyRagLambda.addEnvironment("STUDY_LOG_TABLE_NAME", studyLogTableRef.tableName);
+studyRagLambda.addEnvironment(
+  "STUDY_LOG_GSI_NAME",
+  "studyLogsByOwnerGoalKeyAndLogDate",
+);
